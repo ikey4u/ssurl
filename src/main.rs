@@ -11,8 +11,14 @@
 ///
 /// tag is used as comments, optional.
 
+extern crate clap;
 extern crate base64;
+
 use std::collections::HashMap;
+use std::env;
+use std::fs::File;
+use std::io::{self, BufRead};
+use clap::{App, Arg};
 
 #[derive(Default, Debug)]
 struct Server {
@@ -22,6 +28,40 @@ struct Server {
     port: String,
     tag: String,
     options: HashMap<String, String>,
+}
+
+fn encode_server(srv: &Server) -> String {
+    let info = base64::encode(&format!("{}:{}", srv.method.clone(), srv.password.clone()));
+    let tag = srv.tag.clone();
+    let tag: String = tag.as_bytes()
+        .iter()
+        .map(|e| {
+                if e.is_ascii_alphanumeric() {
+                format!("{}", *e as char)
+                } else {
+                    format!("%{:02x?}", e).to_uppercase()
+                }
+            })
+        .collect::<String>();
+
+    format!("ss://{info}@{hostname}:{port}{plug}{tag}",
+            info = info,
+            hostname = srv.hostname.clone(),
+            port = srv.port.clone(),
+            plug = {
+                if srv.options.len() > 0 {
+                    let mut options = format!("{}", "/?");
+                    for (k, v) in srv.options.iter() {
+                        options.push_str(&format!("{}={};", k, v));
+                    }
+                    if options.ends_with(';') { options.pop(); }
+                    options
+                } else {
+                    "".to_string()
+                }
+            },
+            tag = format!("#{}", tag),
+    )
 }
 
 fn decode_uri(uri: &str) -> Result<String, &str> {
@@ -52,7 +92,7 @@ fn decode_uri(uri: &str) -> Result<String, &str> {
                     idx += 1;
                     if idx < chars.len() {
                         let c = chars[idx];
-                        // if there is no, break
+                        // if there is no percent-encoding chars, break
                         if c != '%' {
                             if let Ok(savedstr) = String::from_utf8(strbytes) {
                                 human_uri.push_str(&savedstr);
@@ -60,8 +100,11 @@ fn decode_uri(uri: &str) -> Result<String, &str> {
                             human_uri.push(c);
                             break;
                         }
-                    // no more chars, we break
+                    // reach the last character of the uri, save analyzed chars
                     } else {
+                        if let Ok(savedstr) = String::from_utf8(strbytes) {
+                            human_uri.push_str(&savedstr);
+                        }
                         break;
                     }
                 }
@@ -73,7 +116,7 @@ fn decode_uri(uri: &str) -> Result<String, &str> {
     return Ok(human_uri);
 }
 
-fn sip002_to_json(sip002: &str) -> Result<Server, &str> {
+fn decode_sip002(sip002: &str) -> Result<Server, &str> {
 
     if !sip002.starts_with("ss://") {
         return Err("SIP002 should begin with ss://.");
@@ -155,15 +198,18 @@ fn sip002_to_json(sip002: &str) -> Result<Server, &str> {
 
     if let Some(plug) = server.get("PLUG") {
         if let Ok(plug) = decode_uri(plug) {
-            if plug.starts_with('?') {
-                let plug = &plug[1..]; // remove the first `?` character
-                let options: HashMap<_, _> = plug.split(';').map(|item| {
-                        let kv: Vec<_> = item.split('=').collect();
-                        (kv[0].to_string(), kv[1].to_string())
-                }).collect();
-                config.options = options;
-            } else {
-                println!("{}", "Invalid plugin option is ignored.");
+            // Process non-empty plugin options
+            if plug != "?" {
+                if plug.starts_with("?plugin") {
+                    let plug = &plug[1..]; // remove the first `?` character
+                    let options: HashMap<_, _> = plug.split(';').map(|item| {
+                            let kv: Vec<_> = item.split('=').collect();
+                            (kv[0].to_string(), kv[1].to_string())
+                    }).collect();
+                    config.options = options;
+                } else {
+                    println!("{}", "Invalid plugin option is ignored.");
+                }
             }
         } else {
             println!("{}", "Cannot decode plugin options, skipped!");
@@ -173,11 +219,86 @@ fn sip002_to_json(sip002: &str) -> Result<Server, &str> {
     Ok(config)
 }
 
+fn dump(fmt: &str, srv: &Server) -> String {
+    match fmt {
+        "sip002" => {
+            encode_server(srv)
+        },
+        "rust" => {
+            todo!();
+        },
+        "android" => {
+            todo!();
+        },
+        // default configuration is shadowsocks-android
+        _ => {
+            "Unknown format".to_string()
+        },
+    }
+}
+
 fn main() {
-    let sip002 = "ss://cmM0LW1kNTpwYXNzd2Q=@192.168.100.1:8888/?plugin=obfs-local%3Bobfs%3Dhttp#Example2";
-    if let Ok(server) = sip002_to_json(sip002) {
-        println!("server => {:#?}", server);
-    } else {
-        println!("WRONG!");
+    let matchs = App::new("ssurl")
+        .version("0.1.0")
+        .author("bugnofree <pwnkeeper@gmail.com>")
+        .about("Convert SIP002 schema URL to variable configuration files.")
+        .arg(Arg::with_name("input")
+                .short("i")
+                .long("--input")
+                .value_name("FILE")
+                .help("The path to sip002 file.")
+                .takes_value(true))
+        .arg(Arg::with_name("format")
+                .short("F")
+                .long("--format")
+                .value_name("FORMAT")
+                .help("android for shadowsocks-android, rust shdowsocks-rust, sip002 for standard SIP002 URL (valid for shadowsocksX-NG as well).")
+                .takes_value(true))
+        .arg(Arg::with_name("output")
+                .short("o")
+                .long("--output")
+                .value_name("OUTPUT")
+                .help("The file path to save the converted result.")
+                .takes_value(true))
+        .arg(Arg::with_name("uri")
+                .value_name("uri")
+                .help("Convert a signle SIP002 URL, if passed as command line parameter, put the URL in double quote."))
+        .get_matches();
+
+    let _format = matchs.value_of("format").unwrap_or("android");
+
+    let _output: String = match matchs.value_of("output") {
+        Some(output) => (*output).to_string(),
+        None => {
+            let dir = env::current_dir().unwrap();
+            if let Some(output) = dir.to_str() {
+                (*output).to_string()
+            } else {
+                panic!("Cannot get current directory!")
+            }
+        }
+    };
+
+    if let Some(uri) = matchs.value_of("uri") {
+        if let Ok(server) = decode_sip002(uri) {
+            println!("{:#?}", server);
+        } else {
+            println!("Invalid SIP002 URL!");
+        }
+    }
+
+    if let Some(input) = matchs.value_of("input") {
+        let file = match File::open(input) {
+            Ok(file) => file,
+            Err(err) => panic!("Couldn't open {}: {}",input, err),
+        };
+        let lines = io::BufReader::new(file).lines();
+        for line in lines {
+            if let Ok(line) = line {
+                if let Ok(server) = decode_sip002(&line) {
+                    println!("{}", dump("sip002", &server));
+                }
+            }
+        }
     }
 }
