@@ -12,16 +12,16 @@
 /// tag is used as comments, optional.
 
 extern crate base64;
-use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Default, Debug)]
 struct Server {
     method: String,
     password: String,
     hostname: String,
     port: String,
     tag: String,
+    options: HashMap<String, String>,
 }
 
 fn decode_uri(uri: &str) -> Result<String, &str> {
@@ -153,7 +153,22 @@ fn sip002_to_json(sip002: &str) -> Result<Server, &str> {
         config.tag = tag;
     }
 
-    // TODO( 2020-01-23 ): plugin parsing
+    if let Some(plug) = server.get("PLUG") {
+        if let Ok(plug) = decode_uri(plug) {
+            if plug.starts_with('?') {
+                let plug = &plug[1..]; // remove the first `?` character
+                let options: HashMap<_, _> = plug.split(';').map(|item| {
+                        let kv: Vec<_> = item.split('=').collect();
+                        (kv[0].to_string(), kv[1].to_string())
+                }).collect();
+                config.options = options;
+            } else {
+                println!("{}", "Invalid plugin option is ignored.");
+            }
+        } else {
+            println!("{}", "Cannot decode plugin options, skipped!");
+        }
+    }
 
     Ok(config)
 }
@@ -161,7 +176,7 @@ fn sip002_to_json(sip002: &str) -> Result<Server, &str> {
 fn main() {
     let sip002 = "ss://cmM0LW1kNTpwYXNzd2Q=@192.168.100.1:8888/?plugin=obfs-local%3Bobfs%3Dhttp#Example2";
     if let Ok(server) = sip002_to_json(sip002) {
-        println!("server => {:?}", server);
+        println!("server => {:#?}", server);
     } else {
         println!("WRONG!");
     }
