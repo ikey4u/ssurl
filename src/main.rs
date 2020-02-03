@@ -20,7 +20,7 @@ use std::env;
 use std::path::Path;
 use std::fs::File;
 use std::io::{self, BufRead};
-use clap::{App, Arg};
+use clap::{App, Arg, AppSettings};
 use serde_json as json;
 use serde::{Deserialize, Serialize};
 
@@ -225,6 +225,8 @@ fn decode_sip002(sip002: &str) -> Result<Server, &str> {
 
 fn main() -> json::Result<()> {
     let matchs = App::new("ssurl")
+        .setting(AppSettings::ArgRequiredElseHelp)
+        .setting(AppSettings::ColoredHelp)
         .version("0.1.0")
         .author("bugnofree <pwnkeeper@gmail.com>")
         .about("Convert SIP002 schema URL to variable configuration files.")
