@@ -22,7 +22,7 @@ Usage
 		-o, --output <OUTPUT>    The file path to save the converted result.
 
 	ARGS:
-		<uri>    Convert a signle SIP002 URL, if passed as command line parameter, put the URL in double quote.
+		<uri>    Convert a single SIP002 URL, if passed as a command line parameter, put the URL in double quote.
 
 Examples
 
