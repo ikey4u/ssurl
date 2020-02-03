@@ -14,18 +14,22 @@
 extern crate clap;
 extern crate base64;
 
+use std::io::prelude::*;
 use std::collections::HashMap;
 use std::env;
+use std::path::Path;
 use std::fs::File;
 use std::io::{self, BufRead};
 use clap::{App, Arg};
+use serde_json as json;
+use serde::{Deserialize, Serialize};
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Deserialize, Serialize)]
 struct Server {
     method: String,
     password: String,
     hostname: String,
-    port: String,
+    port: u16,
     tag: String,
     options: HashMap<String, String>,
 }
@@ -47,7 +51,7 @@ fn encode_server(srv: &Server) -> String {
     format!("ss://{info}@{hostname}:{port}{plug}{tag}",
             info = info,
             hostname = srv.hostname.clone(),
-            port = srv.port.clone(),
+            port = srv.port,
             plug = {
                 if srv.options.len() > 0 {
                     let mut options = format!("{}", "/?");
@@ -162,7 +166,7 @@ fn decode_sip002(sip002: &str) -> Result<Server, &str> {
                 let v: Vec<_> = info.split('@').collect();
                 let (v1, v2):(Vec<_>, Vec<_>) = (v[0].split(':').collect(), v[1].split(':').collect());
                 config.hostname = v2[0].to_string();
-                config.port = v2[1].to_string();
+                config.port = v2[1].to_string().parse::<u16>().unwrap();
                 found_host = true;
                 v1
             } else {
@@ -184,7 +188,7 @@ fn decode_sip002(sip002: &str) -> Result<Server, &str> {
             if let Some(entry) = server.get("HOST") {
                 let v:Vec<_> = entry.split(':').collect();
                 config.hostname = v[0].to_string();
-                config.port = v[1].to_string();
+                config.port = v[1].to_string().parse::<u16>().unwrap();
             }
         } else {
             return Err("Cannot found `hostname:passowrd` section!");
@@ -219,25 +223,7 @@ fn decode_sip002(sip002: &str) -> Result<Server, &str> {
     Ok(config)
 }
 
-fn dump(fmt: &str, srv: &Server) -> String {
-    match fmt {
-        "sip002" => {
-            encode_server(srv)
-        },
-        "rust" => {
-            todo!();
-        },
-        "android" => {
-            todo!();
-        },
-        // default configuration is shadowsocks-android
-        _ => {
-            "Unknown format".to_string()
-        },
-    }
-}
-
-fn main() {
+fn main() -> json::Result<()> {
     let matchs = App::new("ssurl")
         .version("0.1.0")
         .author("bugnofree <pwnkeeper@gmail.com>")
@@ -265,14 +251,20 @@ fn main() {
                 .help("Convert a signle SIP002 URL, if passed as command line parameter, put the URL in double quote."))
         .get_matches();
 
-    let _format = matchs.value_of("format").unwrap_or("android");
+    let format = matchs.value_of("format").unwrap_or("android");
 
-    let _output: String = match matchs.value_of("output") {
-        Some(output) => (*output).to_string(),
+    let supported_format = vec!["rust", "android", "sip002"];
+    if !supported_format.contains(&format) {
+        println!("Supported formats: {}", supported_format.join(","));
+        return Ok(());
+    }
+
+    let output = match matchs.value_of("output") {
+        Some(output) => Path::new(output).to_path_buf(),
         None => {
             let dir = env::current_dir().unwrap();
             if let Some(output) = dir.to_str() {
-                (*output).to_string()
+                Path::new(output).join("result.txt")
             } else {
                 panic!("Cannot get current directory!")
             }
@@ -293,12 +285,87 @@ fn main() {
             Err(err) => panic!("Couldn't open {}: {}",input, err),
         };
         let lines = io::BufReader::new(file).lines();
-        for line in lines {
-            if let Ok(line) = line {
-                if let Ok(server) = decode_sip002(&line) {
-                    println!("{}", dump("sip002", &server));
+
+        let data: String = match format {
+            "rust" => {
+                let mut result = json::json!({
+                    "servers": [],
+                    "local_port": 1086,
+                    "local_address": "127.0.0.1",
+                });
+                for line in lines {
+                    if let Ok(line) = line {
+                        if let Ok(srv) = decode_sip002(&line) {
+                            if let Some(servers) = result["servers"].as_array_mut() {
+                                servers.push(json::json!({
+                                    "address": srv.hostname,
+                                    "port": srv.port,
+                                    "password": srv.password,
+                                    "method": srv.method,
+                                    "timeout": 300
+                                }));
+                            }
+                        }
+                    }
                 }
-            }
+                if let Ok(v) = json::to_string_pretty(&result) {
+                    v
+                } else {
+                    String::new()
+                }
+            },
+
+            "sip002" => {
+                let mut result = String::new();
+                for line in lines {
+                    if let Ok(line) = line {
+                        if let Ok(srv) = decode_sip002(&line) {
+                            result.push_str(&encode_server(&srv));
+                            result.push_str("\n");
+                        }
+                    }
+                }
+                result
+            },
+
+            "android" => {
+                let mut result = json::json!([]);
+                for line in lines {
+                    if let Ok(line) = line {
+                        if let Ok(srv) = decode_sip002(&line) {
+                            let j = json::json!({
+                                "server": srv.hostname,
+                                "server_port": srv.port,
+                                "password": srv.password,
+                                "method": srv.method,
+                                "remarks": srv.tag,
+                                "route": "bypass-lan-china",
+                                "remote_dns": "114.114.114.114",
+                                "ipv6": true,
+                                "proxy_apps": {
+                                    "enabled": false
+                                },
+                                "udpdns": false
+                            });
+                            result.as_array_mut().unwrap().push(j);
+                        }
+                    }
+                }
+                if let Ok(v) = json::to_string_pretty(&result) {
+                    v
+                } else {
+                    String::new()
+                }
+            },
+
+            _ => panic!(format!("Only support format {}", format)),
+        };
+
+        if let Ok(mut f) = File::create(&output) {
+            f.write(data.as_bytes()).expect(format!("Unable to write to {}", output.to_str().unwrap()).as_str()); 
+            println!("The result is saved into {}", output.to_str().unwrap());
         }
     }
+
+    Ok(())
 }
