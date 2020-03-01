@@ -1,15 +1,39 @@
-/// SIP002 encoding format could be found here: https://shadowsocks.org/en/spec/SIP002-URI-Scheme.html
-///
-/// In a nut shell, the format looks like below
-///
-///     SS-URI = ss://<method>:<password>@<hostname>:<port>[/][?plugin][#<tag>]
-///
-/// Among wchich, `<method>:<password>` is encoded with base64 method, some SS provider may also encode
-/// `<method>:<password>@hostname:port` as a whole.
-///
-/// plugin is optional, but if it presents, then `/` is required.
-///
-/// tag is used as comments, optional.
+//! Parsing SIP002 URI Scheme to
+//! [shadowsocks-android](https://github.com/shadowsocks/shadowsocks-android),
+//! [shadowsocks-rust](https://github.com/shadowsocks/shadowsocks-rust) configurations and standard SIP002
+//! Scheme(see more below).
+//!
+//! Standard SIP002 encoding scheme (RFC3986) could be found here [SIP002 URI Scheme](https://shadowsocks.org/en/spec/SIP002-URI-Scheme.html).
+//! To be short, the format is defined as
+//!
+//!     ss://<method>:<password>@<hostname>:<port>[/][?plugin][#<tag>]
+//!
+//! `plugin` is optional, but if it presents, then `/` is required.
+//! `tag` is used as comments, optional.
+//!
+//! When you distribute that to someone else, you should make some changes
+//!
+//!     ss://<method>:<password>@<hostname>:<port>[/][?plugin][#<tag>]
+//!          +-----------------+
+//!                  |
+//!            base64 encoding
+//!                  |
+//!                  v
+//!          +-------------------------+
+//!     ss://base64(<method>:<password>)@<hostname>:<port>[/][?plugin][#<tag>]
+//!
+//! However, shadowsocks for Android and iOS accept more, the following format is also valid
+//! according to [shadowsocks quick guide](https://shadowsocks.org/en/config/quick-guide.html):
+//!
+//!     ss://<method>:<password>@<hostname>:<port>[/][?plugin][#<tag>]
+//!          +-----------------------------------+
+//!                             |
+//!                       base64 encoding
+//!                             |
+//!                             v
+//!          +-------------------------------------------+
+//!     ss://base64(<method>:<password>@<hostname>:<port>)[/][?plugin][#<tag>]
+//!
 
 extern crate clap;
 extern crate base64;
@@ -34,6 +58,7 @@ struct Server {
     options: HashMap<String, String>,
 }
 
+/// Encode a [Server](struct.Server.html) into SIP002 format
 fn encode_server(srv: &Server) -> String {
     let info = base64::encode(&format!("{}:{}", srv.method.clone(), srv.password.clone()));
     let tag = srv.tag.clone();
@@ -68,6 +93,7 @@ fn encode_server(srv: &Server) -> String {
     )
 }
 
+/// Decode encoded HTML entities into plain string
 fn decode_uri(uri: &str) -> Result<String, &str> {
     let mut human_uri = String::new();
     let chars:Vec<_> = uri.chars().collect();
@@ -120,6 +146,7 @@ fn decode_uri(uri: &str) -> Result<String, &str> {
     return Ok(human_uri);
 }
 
+/// Decode SIP002 into [Server](struct.Server.html)
 fn decode_sip002(sip002: &str) -> Result<Server, &str> {
 
     if !sip002.starts_with("ss://") {
@@ -364,7 +391,7 @@ fn main() -> json::Result<()> {
         };
 
         if let Ok(mut f) = File::create(&output) {
-            f.write(data.as_bytes()).expect(format!("Unable to write to {}", output.to_str().unwrap()).as_str()); 
+            f.write(data.as_bytes()).expect(format!("Unable to write to {}", output.to_str().unwrap()).as_str());
             println!("The result is saved into {}", output.to_str().unwrap());
         }
     }
